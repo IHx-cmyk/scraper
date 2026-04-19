@@ -4,71 +4,47 @@ const cheerio = require("cheerio");
 const BASE = "https://pupilvideo.blogspot.com";
 
 const pupilvideo = {
-  async latest() {
+  async search(query) {
     try {
-      const { data } = await axios.get(BASE, {
-        headers: {
-          "User-Agent": "Mozilla/5.0"
+      const { data } = await axios.get(
+        `${BASE}/feeds/posts/default?alt=json&max-results=500`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0"
+          }
         }
-      });
+      );
 
-      const $ = cheerio.load(data);
-      const results = [];
+      const entries = data.feed?.entry || [];
 
-      $("a").each((_, el) => {
-        const title = $(el).text().trim();
-        const href = $(el).attr("href");
-
-        if (
-          title &&
-          href &&
-          href.includes("blogspot.com") &&
-          /\/\d{4}\//.test(href)
-        ) {
-          results.push({
-            title,
-            link: href
-          });
-        }
-      });
-
-      const unique = [
-        ...new Map(results.map(x => [x.link, x])).values()
-      ];
+      const results = entries
+        .map(entry => ({
+          title: entry.title?.$t || "",
+          link:
+            entry.link?.find(x => x.rel === "alternate")?.href || null,
+          published: entry.published?.$t || null
+        }))
+        .filter(item =>
+          item.title.toLowerCase().includes(query.toLowerCase())
+        );
 
       return {
         status: true,
-        total: unique.length,
-        data: unique
+        query,
+        total: results.length,
+        data: results
       };
     } catch (err) {
       return {
         status: false,
-        error: err.message
+        error: err.response?.status || err.message
       };
     }
   },
 
-  async search(query) {
-    const latest = await this.latest();
-
-    if (!latest.status) return latest;
-
-    const filtered = latest.data.filter(item =>
-      item.title.toLowerCase().includes(query.toLowerCase())
-    );
-
-    return {
-      status: true,
-      query,
-      total: filtered.length,
-      data: filtered
-    };
-  },
-
-  async detail(url) {
+  async download(postUrl) {
     try {
-      const { data } = await axios.get(url, {
+      const { data } = await axios.get(postUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0"
         }
@@ -80,38 +56,39 @@ const pupilvideo = {
         $("h1").first().text().trim() ||
         $("title").text().trim();
 
-      const description =
-        $(".post-body").text().trim() ||
-        $("body").text().slice(0, 300).trim();
+      const downloads = [];
 
-      const videos = [];
+      $("a, iframe, video source").each((_, el) => {
+        const href =
+          $(el).attr("href") ||
+          $(el).attr("src");
 
-      $("iframe, video source, a").each((_, el) => {
-        const src =
-          $(el).attr("src") ||
-          $(el).attr("href");
+        if (!href) return;
 
+        // filter link movie / download
         if (
-          src &&
-          (src.includes("drive.google") ||
-            src.includes("youtube") ||
-            src.includes("mp4") ||
-            src.includes("video"))
+          href.includes("drive.google") ||
+          href.includes("mega.nz") ||
+          href.includes("pixeldrain") ||
+          href.includes("mp4") ||
+          href.includes("mkv") ||
+          href.includes("video") ||
+          href.includes("download")
         ) {
-          videos.push(src);
+          downloads.push(href);
         }
       });
 
       return {
         status: true,
         title,
-        description,
-        videos: [...new Set(videos)]
+        total_links: downloads.length,
+        links: [...new Set(downloads)]
       };
     } catch (err) {
       return {
         status: false,
-        error: err.message
+        error: err.response?.status || err.message
       };
     }
   }
@@ -119,20 +96,17 @@ const pupilvideo = {
 
 module.exports = pupilvideo;
 
-// test
+// ===== TEST =====
 if (require.main === module) {
   (async () => {
-    console.log("=== LATEST ===");
-    console.log(await pupilvideo.latest());
+    console.log("=== SEARCH ===");
+    const res = await pupilvideo.search("alien");
+    console.log(JSON.stringify(res, null, 2));
 
-    console.log("\n=== SEARCH ===");
-    console.log(await pupilvideo.search("ben 10"));
-
-    console.log("\n=== DETAIL ===");
-    console.log(
-      await pupilvideo.detail(
-        "https://pupilvideo.blogspot.com/2022/10/ben-10-alien-force-3-seasons.html"
-      )
-    );
+    if (res.status && res.data.length) {
+      console.log("\n=== DOWNLOAD ===");
+      const dl = await pupilvideo.download(res.data[0].link);
+      console.log(JSON.stringify(dl, null, 2));
+    }
   })();
 }
